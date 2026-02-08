@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/go-redis/redis/v8"
@@ -58,6 +59,53 @@ func isAllowed(rdb *redis.Client, userID string, limit int, windowsMs int) (int,
 	return status, remaining, nil
 }
 
+func RateLimiterMiddleware(rdb *redis.Client, limit int, windowsMs int) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID := r.Header.Get("X-User-ID")
+			if userID == "" {
+				userID = "anonymous"
+			}
+
+			status, rem, err := isAllowed(rdb, userID, limit, windowsMs)
+
+			if err != nil {
+				fmt.Println("Redis Error: ", err)
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			visualBucket := ""
+			for i := 0; i < limit; i++ {
+				if i < (limit - rem) {
+					visualBucket += "🔴 " // Filled slot
+				} else {
+					visualBucket += "⚪ " // Empty slot
+				}
+			}
+
+			statusMsg := "OK"
+			if status == 1 {
+				statusMsg = "EVICTED ♻️"
+			}
+
+			fmt.Printf("[%s] User: %-8s | %s | Status: %s\n",
+				time.Now().Format("15:04:05"), userID, visualBucket, statusMsg)
+
+			w.Header().Set("X-RateLimiter-Limit", fmt.Sprint(limit))
+			w.Header().Set("X-RateLimiter-Remaining", fmt.Sprint(rem))
+
+			if status == 1 {
+				w.Header().Set("X-RateLimiter-Evicted", "True")
+			} else {
+				w.Header().Set("X-RateLimiter-Evicted", "False")
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 func main() {
 	fmt.Println("Modified Leaky Bucket Alpha Test (With Capacity Tracking)")
 
@@ -67,19 +115,12 @@ func main() {
 		DB:       0,
 	})
 
-	for i := range 10 {
-		fmt.Printf("Request %d => ", i)
-		status, remaining, err := isAllowed(rdb, "user69", 5, 2000)
-		if err != nil {
-			fmt.Println("Error: ", err)
-			continue
-		}
+	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("Successfully reached the API"))
+	})
 
-		msg := "Processed (Normal)"
-		if status == 1 {
-			msg = "Processed (Evicted Oldest)"
-		}
+	protectedHandler := RateLimiterMiddleware(rdb, 5, 2000)(finalHandler)
 
-		fmt.Printf("Request %d => %s | Space Remaining: %d/5\n", i+1, msg, remaining)
-	}
+	fmt.Println("Server starting on port 8081")
+	http.ListenAndServe(":8081", protectedHandler)
 }
