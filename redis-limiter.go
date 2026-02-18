@@ -92,13 +92,13 @@ func RateLimiterMiddleware(rdb *redis.Client, limit int, windowsMs int) func(htt
 			fmt.Printf("[%s] User: %-8s | %s | Status: %s\n",
 				time.Now().Format("15:04:05"), userID, visualBucket, statusMsg)
 
-			w.Header().Set("X-RateLimiter-Limit", fmt.Sprint(limit))
-			w.Header().Set("X-RateLimiter-Remaining", fmt.Sprint(rem))
+			w.Header().Set("X-Ratelimit-Limit", fmt.Sprint(limit))
+			w.Header().Set("X-Ratelimit-Remaining", fmt.Sprint(rem))
 
 			if status == 1 {
-				w.Header().Set("X-RateLimiter-Evicted", "True")
+				w.Header().Set("X-Ratelimit-Evicted", "True")
 			} else {
-				w.Header().Set("X-RateLimiter-Evicted", "False")
+				w.Header().Set("X-Ratelimit-Evicted", "False")
 			}
 
 			next.ServeHTTP(w, r)
@@ -116,6 +116,7 @@ func main() {
 	})
 
 	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("Successfully reached the API"))
 	})
 
